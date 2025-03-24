@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ACME Automotive-AI agent</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      height: 800px;
+      border: 1px solid #ccc;
+      margin: 50px auto;
+      max-width: 600px;
+      padding: 20px;
+    }
+    .chat {
+      flex: 1;
+      overflow-y: scroll;
+      border: 1px solid #ccc;
+      margin-bottom: 20px;
+    }
+    #user-message {
+      height: 40px;
+      width: calc(100% - 80px);
+      padding: 5px;
+      box-sizing: border-box;
+    }
+  </style>
+</head>
+<body>
+<header style="display: flex; align-items: center; justify-content: space-between;">
+  <h2 style="margin: 0;">ACME Automotive-AI agent</h2>
+  <img src="/logo" alt="ACME Automotive">
+</header>
+<div id="main-container" class="container">
+  <div class="chat" id="chat">
+    <!-- Messages will be inserted here -->
+  </div>
+  <input type="text" id="user-message" placeholder="Ask a question..." onkeypress="handleMessage(event)"
+         autofocus />
+  <div class="form-container">
+    <p>override</p>
+    <ul>
+      <li>model <input type="text" id="target_model" value="acme_llm" /></li>
+      <li>app <input type="text" id="appid" value="acme_ai_agent" /></li>
+      <li>userid <input type="text" id="userid" value="user" /></li>
+      <li>stream response <input type="checkbox" id="stream" /></li>
+    </ul>
+  </div>
+</div>
+<script>
+  const chat = document.getElementById('chat');
+  const targetModel = document.getElementById('target_model');
+  const appIdInput = document.getElementById('appid');
+  const userIdInput = document.getElementById('userid');
+  const streamToggleInput = document.getElementById('stream');
+  var mId = 0;
+  function handleMessage(event) {
+    if (event.key === 'Enter') {
+      const userMessage = event.target.value;
+      displayMessage(userMessage, true);
+      sendPostRequest(userMessage);
+      event.target.value = '';
+    }
+  }
+  function displayMessage(message, isUserMessage = true, isStream) {
+    var messageElement = '';
+    var prefix = "<b>ACME- </b>";
+    if (isUserMessage) {
+      prefix = "<b>You- </b>";
+    }
+    if (isStream) {
+      prefix = "";
+      document.getElementById("chat-res-" + mId).innerHTML += message
+    } else {
+      messageElement = document.createElement('p');
+      messageElement.id = "chat-res-" + mId;
+      messageElement.innerHTML = prefix + message;
+      chat.appendChild(messageElement);
+    }
+    chat.scrollTop = chat.scrollHeight; // Scroll to bottom after adding new messages
+  }
+  function sendPostRequest(inputString) {
+    var model = targetModel.value;
+    var thisAppId = appIdInput.value;
+    var thisUserId = userIdInput.value;
+    var reqPayload = {
+      model: model,
+      appid: thisAppId,
+      userid: thisUserId,
+      messages: [
+        {
+          role: "user",
+          content: inputString
+        }
+      ],
+      stream: streamToggleInput.checked
+    }
+    fetch('/myllm', {
+      method: "POST",
+      headers: {
+        'Accept': 'text/event-stream',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(reqPayload)
+    })
+            .then(response => {
+              if (!response.ok) {
+                throw new Error('network err, view console for details');
+              }
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder("utf-8");
+              mId++
+              var x = 0;
+              function read() {
+                reader.read().then(({ done, value }) => {
+                  if (done) {
+                    console.log('question answered!');
+                    return;
+                  }
+                  //  in streaming, you need to chunk further
+                  var maybechunk = decoder.decode(value);
+                  var chunked = [];
+                  // split when in streaming mode only
+                  // indicated by content-type: application/x-ndjson
+                  if (response.headers.get("content-type") === "application/x-ndjson") {
+                    chunked = maybechunk.split("\n");
+                  } else {
+                    chunked = [maybechunk];
+                  }
+
+                  for (var ci = 0; ci < chunked.length; ci++) {
+                    var chunk = chunked[ci];
+                    x++
+                    if (chunk != null && chunk.length > 2) {
+                      try {
+                        const objchunk = JSON.parse(chunk);
+                        if (x == 1) {
+                          displayMessage(objchunk.message.content, false, false);
+                        } else {
+                          displayMessage(objchunk.message.content, false, true);
+                        }
+                      } catch (error) {
+                        // sometimes, we end up with a chunk that does not contain json
+                        // maybe the \n between chunks? or some spaces
+                        console.log("problematic chunk: " + chunk + " " + error);
+                      }
+                    }
+                  }
+                  read();
+                });
+              }
+              read();
+            })
+            .catch(error => {
+              console.error('fetch error:', error);
+            });
+  }
+</script>
+</body>
+</html>
